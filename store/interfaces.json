@@ -1,0 +1,6 @@
+{
+  "pdpbanner": {
+    "component": "PDPBanner",
+    "composition": "children"
+  }
+}
