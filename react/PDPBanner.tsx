@@ -1,43 +1,68 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { canUseDOM } from "vtex.render-runtime";
+import { Link, canUseDOM } from "vtex.render-runtime";
+// @ts-ignore
+import { useProduct } from 'vtex.product-context';
 
 import styles from "./styles.css";
 
+const blockClassList = {
+  values: ["bigBluePromo", "textOnly", "leftImage", "rightImage"],
+  labels: ["Big Blue Promo", "Text Only", "Text Right, Image Left", "Text Left, Image Right"]
+};
+
 interface PDPBannerProps {
-  banners: Array<BannerObject>
+  parentListBanners: [ParentListBanner]
+  specBanners: [SpecBanner]
+  urlBanners: [URLBanner]
 }
 
-interface BannerObject {
-  match: MatchObject
-  date?: DateObject
-  text: TextObject
+interface ParentListBanner {
+  __editorItemTitle: string
+  parentList: string
+  text: BannerTextObject
   image: string
   link: string
   blockClass: string
+  startDate: string
+  endDate: string
 }
 
-interface MatchObject {
-  matchType: BannerType
-  list: Array<TermObject>
+interface SpecBanner {
+  __editorItemTitle: string
+  matchSpec: SpecMatchObject
+  text: BannerTextObject
+  image: string
+  link: string
+  blockClass: string
+  startDate: string
+  endDate: string
 }
 
-interface TermObject {
-  __editorItemTitle: string;
+interface URLBanner {
+  __editorItemTitle: string
+  matchList: [URLMatchObject]
+  text: BannerTextObject
+  image: string
+  link: string
+  blockClass: string
+  startDate: string
+  endDate: string
 }
 
-interface TextObject {
-  title: string
-  subtitle: string
+interface SpecMatchObject {
+  spec: string
+  value: string
+  index: number
 }
 
-interface DateObject {
-  from: string
-  to: string
+interface URLMatchObject {
+  __editorItemTitle: string
 }
 
-enum BannerType {
-  url = "url",
-  spec = "spec"
+interface BannerTextObject {
+  title: string,
+  subtitle: string,
+  disclaimer: string
 }
 
 interface BannerInfo {
@@ -45,273 +70,456 @@ interface BannerInfo {
   image?: string
   title?: string
   subtitle?: string
+  disclaimer?: string
   link?: string
   blockClass?: string
 }
 
-const blankBanner: BannerInfo = { active: false, image: "", title: "", subtitle: "", link: "", blockClass: "" };
-const specClassPrefix = "eriksbikeshop-product-attribute-0-x-productAttributeWrapper--";
-const defaultBlockClass = "standard";
+interface VTEXProperty {
+  name: string
+  values: Array<string>
+}
 
-const PDPBanner: StorefrontFunctionComponent<PDPBannerProps> = ({ banners }) => {
+interface SpecObject {
+  name?: string
+  value?: string
+}
+
+const blankBanner: BannerInfo = { active: false, image: "", title: "", subtitle: "", link: "", blockClass: "" };
+
+const PDPBanner: StorefrontFunctionComponent<PDPBannerProps> = ({ parentListBanners, specBanners, urlBanners }) => {
+  const productContextValue = useProduct();
+
+  // Ref
   const openGate = useRef(true);
-  const breakLoop = useRef(false);
-  const userPath = useRef("");
+  const breakSearchLoop = useRef(false);
 
   const [bannerInfo, setBannerInfo] = useState<BannerInfo>(blankBanner);
 
   // Component Did Mount. - LM
   useEffect(() => {
-    if (!canUseDOM) return;
     if (!openGate.current) return;
     openGate.current = false;
 
-    userPath.current = window.location.href.split(".com/")[1];
-    console.info(banners);
-
-    searchBanners();
+    // runBanner();
+    // console.info(productContextValue.product.properties);
+    { parentListBanners }
+    { specBanners }
+    { urlBanners }
   });
 
-  // There is no listener for a URL path change at the moment,
-  // so a polling method is required. I don't like it either. - LM
   useEffect(() => {
-    const pollURL = setInterval(() => {
-      const comparePath = userPath.current;
-      const possibleNewPath = window.location.href.split(".com/")[1];
-
-      if (possibleNewPath !== comparePath) pageReset(possibleNewPath);
-    }, 1000);
-
-    return () => clearInterval(pollURL);
+    if (!canUseDOM) return;
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
   });
+
+  const handleMessage = (e: MessageEvent) => {
+    // Run on navigate
+    const eventName = e.data.eventName;
+    if (eventName === "vtex:productView") runBanner();
+  }
+
+  const runBanner = () => {
+    pageReset();
+
+    runParentListBanner();
+
+    if (!breakSearchLoop.current) runSpecBanner();
+
+    if (!breakSearchLoop.current) runURLBaner();
+  }
+
+  const runParentListBanner = () => {
+    const productParentId = productContextValue.product.productReference;
+    const currentBanners = parentListBanners.filter(banner => checkBannerDates(banner));
+
+    const allParentLists = currentBanners.map(banner => {
+      return banner.parentList;
+    });
+
+    for (let parentListIndex = 0; parentListIndex < currentBanners.length; parentListIndex++) {
+      if (breakSearchLoop.current) break;
+
+      const productParentIdFound = allParentLists[parentListIndex].includes(productParentId);
+      if (productParentIdFound) {
+        breakSearchLoop.current = true;
+        buildBanner(parentListBanners[parentListIndex]);
+      }
+    }
+  }
+
+  const runSpecBanner = () => {
+    const allSpecsFromBanners = buildBannerSpecList();
+    const pagePropertiesThatMatchSpecsFromBanners = searchPageProperties(allSpecsFromBanners);
+
+    if (pagePropertiesThatMatchSpecsFromBanners.length) {
+      for (let propertyIndex = 0; propertyIndex < pagePropertiesThatMatchSpecsFromBanners.length; propertyIndex++) {
+        if (breakSearchLoop.current) break;
+
+        const propertySpec = pagePropertiesThatMatchSpecsFromBanners[propertyIndex].name?.toLowerCase();
+        const propertyValue = pagePropertiesThatMatchSpecsFromBanners[propertyIndex].value?.toLowerCase();
+
+        const matchedBannerIndex = specBanners.findIndex((item) => {
+          const bannerSpec = item.matchSpec.spec?.toLowerCase();
+          const bannerValue = item.matchSpec.value?.toLowerCase();
+
+          const specMatch = propertySpec === bannerSpec;
+          const valueMatch = propertyValue === bannerValue;
+
+          return (specMatch && valueMatch) ? true : false;
+        });
+
+        if (matchedBannerIndex > -1) {
+          breakSearchLoop.current = true;
+          buildBanner(specBanners[matchedBannerIndex]);
+        }
+      }
+    }
+  }
+
+  const runURLBaner = () => {
+    if (!canUseDOM) return;
+
+    const userPath = window.location.pathname.toLowerCase();
+
+    for (let bannerIndex = 0; bannerIndex < urlBanners.length; bannerIndex++) {
+      if (breakSearchLoop.current) break;
+
+      const matchList = urlBanners[bannerIndex].matchList;
+
+      for (let matchIndex = 0; matchIndex < matchList.length; matchIndex++) {
+        if (breakSearchLoop.current) break;
+
+        const term = matchList[matchIndex].__editorItemTitle;
+        const matchFound = userPath.includes(term.toLowerCase());
+        if (matchFound) {
+          breakSearchLoop.current = true;
+          buildBanner(urlBanners[bannerIndex])
+        }
+      }
+    }
+  }
+
+  const checkBannerDates = (banner: ParentListBanner | SpecBanner | URLBanner) => {
+    if (!banner.startDate && !banner.endDate) return true;
+
+    const rightNow = Date.now();
+
+    const startDate = new Date(banner.startDate).getTime();
+    if (rightNow < startDate) return false;
+
+    const endDate = new Date(banner.endDate).getTime();
+    if (rightNow > endDate) return false;
+
+    return true;
+  }
+
+  const buildBannerSpecList = () => {
+    const currentBanners = specBanners.filter(banner => checkBannerDates(banner));
+    const bannerSpecList: Array<string> = [];
+
+    currentBanners.forEach(banner => {
+      bannerSpecList.push(banner.matchSpec.spec.toLowerCase());
+    });
+
+    return bannerSpecList;
+  }
+
+  const searchPageProperties = (specList: Array<string>) => {
+    const properties: Array<VTEXProperty> = productContextValue.product.properties;
+    const foundSpecs: Array<SpecObject> = [];
+
+    specList.forEach(spec => {
+      const filter = properties.filter((word) => word.name.toLowerCase() === spec);
+      if (filter.length) {
+        foundSpecs.push({ name: filter[0].name.toLowerCase(), value: filter[0].values[0].toLowerCase() });
+      }
+    });
+    console.info({ properties });
+    return foundSpecs;
+  }
 
   // Reset page for next search. - LM
-  const pageReset = (possibleNewPath: string) => {
+  const pageReset = () => {
     setBannerInfo(blankBanner);
-    userPath.current = possibleNewPath;
-    breakLoop.current = false;
-    searchBanners();
+    breakSearchLoop.current = false;
   }
 
-  // Search { banners } and call appropriate match function for each item. - LM
-  const searchBanners = () => {
-    for (let index = 0; index < banners.length; index++) {
-      if (breakLoop.current) break;
-
-      const tempType = banners[index].match.matchType;
-
-      if (tempType === "url") urlMatch(index);
-      if (tempType === "spec") specMatch(index);
-    }
-  }
-
-  // Search provided { banner } item url parameter. - LM
-  const urlMatch = (index: number) => {
-    const windowPath: string = window.location.href.split(".com/")[1].toLowerCase();
-    const termList = banners[index].match.list;
-
-    let breakTermListLoop = false;
-    for (let i = 0; i < termList.length; i++) {
-      if (breakTermListLoop) break;
-      const item = termList[i].__editorItemTitle;
-
-      const matchFound = windowPath.includes(item.toLowerCase());
-
-      if (matchFound) {
-        breakTermListLoop = true;
-        breakLoop.current = true;
-        checkDate(index);
-      }
-    }
-  }
-
-  // Searches current page for a matched spec. - LM
-  const specMatch = (index: number) => {
-    if (!canUseDOM) return;
-    const termList = banners[index].match.list;
-
-    let breakTermListLoop = false;
-
-    for (let i = 0; i < termList.length; i++) {
-      if (breakTermListLoop) break;
-
-      const item = termList[i].__editorItemTitle.split(", ");
-      const spec = item[0];
-      const condition = item[1];
-
-      const matchClass: Element = document.getElementsByClassName(`${specClassPrefix}${spec}`)[0];
-      if (!matchClass) continue;
-
-      const bannerCondition = condition.toLowerCase();
-      const classCondition = matchClass.children[0].textContent?.toLowerCase();
-
-      const matchFound = classCondition === bannerCondition;
-
-      if (matchFound) {
-        breakTermListLoop = true;
-        breakLoop.current = true;
-        checkDate(index);
-      }
-    }
-  }
-
-  // Checks to see if a provided date range exists, and if the current
-  // date falls within that range. Last step before activation. - LM
-  const checkDate = (index: number) => {
-    const validDate = banners[index].date;
-
-    if (validDate) {
-      // Has Date Range Object.
-      const now = Date.now();
-      const startDate = Date.parse(validDate.from);
-      const endDate = Date.parse(validDate.to);
-
-      if (startDate > now) return; // Not yet active.
-      if (endDate < now) return; // Expired.
-
-      activateBanner(index);
-    } else {
-      // No Date Range Provided.
-      activateBanner(index);
-    }
-  }
-
-  // Renders found banner item on page. - LM
-  const activateBanner = (index: number) => {
-    const b: BannerObject = banners[index];
-
-    const image = b.image || "";
-    const title = b.text ? b.text.title : "";
-    const subtitle = b.text ? b.text.subtitle : "";
-    const link = b.link || "";
-    const blockClass = b.blockClass || defaultBlockClass;
-
-    const tempBannerInfo: BannerInfo = {
+  const buildBanner = (banner: ParentListBanner | SpecBanner | URLBanner) => {
+    const bannerData = {
       active: true,
-      image,
-      title,
-      subtitle,
-      link,
-      blockClass
-    }
-
-    setBannerInfo(tempBannerInfo);
+      image: banner.image ?? "",
+      title: banner.text.title ?? "",
+      subtitle: banner.text.subtitle ?? "",
+      disclaimer: banner.text.disclaimer ?? "",
+      link: banner.link ?? "",
+      blockClass: banner.blockClass ?? ""
+    };
+    console.info(bannerData);
+    setBannerInfo(bannerData);
   }
 
-  const BannerWrapper = () => (
-    <div className={`${styles.wrapper}--${bannerInfo.blockClass}`}>
-      {bannerInfo.image &&
-        <div className={`${styles.imageContainer}--${bannerInfo.blockClass}`}>
-          <img src={bannerInfo.image} className={`${styles.image}--${bannerInfo.blockClass}`} />
+  const Banner = () => (
+    <>
+      {bannerInfo.blockClass === "bigBluePromo" &&
+        <div data-blockclass="bigBluePromo">
+          <div data-text-area>
+            {bannerInfo.title && <div data-title>{bannerInfo.title}</div>}
+            <div data-small-textbox>
+              {bannerInfo.subtitle && <div data-subtitle>{bannerInfo.subtitle}</div>}
+              {bannerInfo.disclaimer && <div data-disclaimer>{bannerInfo.disclaimer}</div>}
+            </div>
+          </div>
         </div>
       }
-      {bannerInfo.title &&
-        <div style={!bannerInfo.image ? { width: "100%" } : {}} className={`${styles.textContainer}--${bannerInfo.blockClass}`}>
-          <div className={`${styles.title}--${bannerInfo.blockClass}`}>{bannerInfo.title}</div>
-          {
-            bannerInfo.subtitle &&
-            <div className={`${styles.subtitle}--${bannerInfo.blockClass}`}>{bannerInfo.subtitle}</div>
-          }
+      {bannerInfo.blockClass === "rightImage" &&
+        <div data-blockclass="rightImage">
+          <div data-text-area>
+            {bannerInfo.title && <div data-title>{bannerInfo.title}</div>}
+            {bannerInfo.subtitle && <div data-subtitle>{bannerInfo.subtitle}</div>}
+          </div>
+          <img data-image src={bannerInfo.image} height={128} alt="" />
         </div>
       }
-    </div>
-  )
+      {bannerInfo.blockClass === "leftImage" &&
+        <div data-blockclass="leftImage">
+          <img data-image src={bannerInfo.image} height={128} alt="" />
+          <div data-text-area>
+            {bannerInfo.title && <div data-title>{bannerInfo.title}</div>}
+            {bannerInfo.subtitle && <div data-subtitle>{bannerInfo.subtitle}</div>}
+          </div>
+        </div>
+      }
+      {bannerInfo.blockClass === "textOnly" &&
+        <div data-blockclass="textOnly">
+          <div data-text-area>
+            {bannerInfo.title && <div data-title>{bannerInfo.title}</div>}
+            {bannerInfo.subtitle && <div data-subtitle>{bannerInfo.subtitle}</div>}
+          </div>
+        </div>
+      }
+    </>
+  );
 
-  const BannerWrapperWithLink = () => (
-    <a href={bannerInfo.link} target="_blank" rel="noreferrer" className={`${styles.link}--${bannerInfo.blockClass} ${styles.link}`}><BannerWrapper /></a>
-  )
+  const LinkContainer = () => (
+    <Link data-link href={bannerInfo.link}><Banner /></Link>
+  );
 
-  if (bannerInfo.active) {
-    return (
-      <div className={`${styles.container}--${bannerInfo.blockClass}`}>
-        {bannerInfo.link ? <BannerWrapperWithLink /> : <BannerWrapper />}
-      </div>
-    )
-  } else {
-    return (<></>);
-  }
+  return (
+    <section aria-label="Related Informaiton Banner">
+      {bannerInfo.link ? <LinkContainer /> : <Banner />}
+    </section>
+  )
 }
 
 PDPBanner.schema = {
   title: "PDP Banner",
   type: "object",
   properties: {
-    banners: {
+    parentListBanners: {
       type: "array",
-      title: "Banners",
-      description: "App terminates when the first match is found. Banners should be in order of priority.",
+      title: "Parent List Banners",
       items: {
         properties: {
           __editorItemTitle: {
             title: "Site Editor Banner Title",
             type: "string"
           },
+          parentList: {
+            title: "Parent ID List",
+            description: "Comma separated list",
+            type: "string",
+            widget: { "ui:widget": "textarea" },
+          },
           text: {
             type: "object",
             properties: {
               title: {
+                title: "Title",
                 type: "string",
-                title: "Title"
+                widget: { "ui:widget": "textarea" }
               },
               subtitle: {
+                title: "Subtitle",
                 type: "string",
-                title: "Subtitle"
+                widget: { "ui:widget": "textarea" }
               }
             }
           },
           image: {
-            title: "Image Source",
-            description: "OPTIONAL | Absolute Path to Image",
-            type: "string"
+            title: "Image",
+            description: "OPTIONAL - Must be 128px height",
+            type: "string",
+            widget: { "ui:widget": "image-uploader" }
           },
           link: {
             title: "Link",
             description: "OPTIONAL | Absolute or Relative Path to URL",
-            type: "string"
+            type: "string",
+            widget: { "ui:widget": "textarea" }
           },
           blockClass: {
-            title: "Block Class",
+            title: "Display Style",
             description: "Style of banner. Contact Web Developer for new styles.",
             type: "string",
-            enum: ["standard", "return", "boot-love", "image-only"]
+            enum: blockClassList.values,
+            enumNames: blockClassList.labels,
           },
-          date: {
+          startDate: {
+            title: "Start at Midnight on this Date",
+            type: "string",
+            description: 'Optional | Press "Backspace" to remove.',
+            format: "date",
+          },
+          endDate: {
+            title: "End at Midnight on this Date",
+            type: "string",
+            description: 'Optional | Press "Backspace" to remove.',
+            format: "date",
+          }
+        }
+      }
+    },
+    specBanners: {
+      type: "array",
+      title: "Spec Match Banners",
+      items: {
+        properties: {
+          __editorItemTitle: {
+            title: "Site Editor Banner Title",
+            type: "string"
+          },
+          matchSpec: {
             type: "object",
             properties: {
-              from: {
-                title: "Start Date",
-                description: "OPTIONAL | Banner begins at midnight on this date.",
-                type: "string"
+              spec: {
+                title: "Specification",
+                description: "Case Sensitive",
+                type: "string",
               },
-              to: {
-                title: "End Date",
-                description: "OPTIONAL | Banner ends at midnight on this date. Banner does not display at all during this day.",
-                type: "string"
+              value: {
+                title: "Value",
+                description: "Case Sensitive",
+                type: "string",
               }
             }
           },
-          match: {
+          text: {
             type: "object",
             properties: {
-              matchType: {
-                title: "Match Type",
-                enum: ["url", "spec"],
-                type: "string"
+              title: {
+                title: "Title",
+                type: "string",
+                widget: { "ui:widget": "textarea" }
               },
-              list: {
-                title: "Match List",
-                type: "array",
-                items: {
-                  properties: {
-                    __editorItemTitle: {
-                      title: "Term",
-                      type: "string",
-                      description: "URL: String. Spec: String, Condition"
-                    }
-                  }
+              subtitle: {
+                title: "Subtitle",
+                type: "string",
+                widget: { "ui:widget": "textarea" }
+              }
+            }
+          },
+          image: {
+            title: "Image",
+            description: "OPTIONAL - Must be 128px height",
+            type: "string",
+            widget: { "ui:widget": "image-uploader" }
+          },
+          link: {
+            title: "Link",
+            description: "OPTIONAL | Absolute or Relative Path to URL",
+            type: "string",
+            widget: { "ui:widget": "textarea" }
+          },
+          blockClass: {
+            title: "Display Style",
+            description: "Style of banner. Contact Web Developer for new styles.",
+            type: "string",
+            enum: blockClassList.values,
+            enumNames: blockClassList.labels,
+          },
+          startDate: {
+            title: "Start at Midnight on this Date",
+            type: "string",
+            description: 'Optional | Press "Backspace" to remove.',
+            format: "date",
+          },
+          endDate: {
+            title: "End at Midnight on this Date",
+            type: "string",
+            description: 'Optional | Press "Backspace" to remove.',
+            format: "date",
+          }
+        }
+      }
+    },
+    urlBanners: {
+      type: "array",
+      title: "URL Match Banners",
+      items: {
+        properties: {
+          __editorItemTitle: {
+            title: "Site Editor Banner Title",
+            type: "string"
+          },
+          matchList: {
+            type: "array",
+            items: {
+              properties: {
+                __editorItemTitle: {
+                  title: "Match Term",
+                  description: "No Spaes. Case Insensitive.",
+                  type: "string"
                 }
               }
             }
+          },
+          text: {
+            type: "object",
+            properties: {
+              title: {
+                title: "Title",
+                type: "string",
+                widget: { "ui:widget": "textarea" }
+              },
+              subtitle: {
+                title: "Subtitle",
+                type: "string",
+                widget: { "ui:widget": "textarea" }
+              }
+            }
+          },
+          image: {
+            title: "Image",
+            description: "OPTIONAL - Must be 128px height",
+            type: "string",
+            widget: { "ui:widget": "image-uploader" }
+          },
+          link: {
+            title: "Link",
+            description: "OPTIONAL | Absolute or Relative Path to URL",
+            type: "string",
+            widget: { "ui:widget": "textarea" }
+          },
+          blockClass: {
+            title: "Display Style",
+            description: "Style of banner. Contact Web Developer for new styles.",
+            type: "string",
+            enum: blockClassList.values,
+            enumNames: blockClassList.labels,
+          },
+          startDate: {
+            title: "Start at Midnight on this Date",
+            type: "string",
+            description: 'Optional | Press "Backspace" to remove.',
+            format: "date",
+          },
+          endDate: {
+            title: "End at Midnight on this Date",
+            type: "string",
+            description: 'Optional | Press "Backspace" to remove.',
+            format: "date",
           }
         }
       }
@@ -320,3 +528,4 @@ PDPBanner.schema = {
 }
 
 export default PDPBanner;
+
