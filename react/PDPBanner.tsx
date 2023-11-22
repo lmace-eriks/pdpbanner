@@ -303,11 +303,11 @@ const PDPBanner: StorefrontFunctionComponent<PDPBannerProps> = ({ parentListBann
   );
 
   const LinkContainer = () => (
-    <Link data-link href={bannerInfo.link}><Banner /></Link>
+    <Link target="_blank" rel="noreferrer" data-link href={bannerInfo.link}><Banner /></Link>
   );
 
   return (
-    <section aria-label="Related Informaiton Banner">
+    <section aria-label="Related Informaiton Banner" className={styles.container}>
       {bannerInfo.link ? <LinkContainer /> : <Banner />}
     </section>
   )
@@ -342,6 +342,11 @@ PDPBanner.schema = {
               },
               subtitle: {
                 title: "Subtitle",
+                type: "string",
+                widget: { "ui:widget": "textarea" }
+              },
+              disclaimer: {
+                title: "Disclaimer Text",
                 type: "string",
                 widget: { "ui:widget": "textarea" }
               }
